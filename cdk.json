@@ -10,6 +10,9 @@
       "controls": {
         "root_login_notifier": true,
         "cloudtrail_change_notifier": true,
+        "kms_change_notifier": true,
+        "iam_posture_scanner": true,
+        "s3_public_access_guard": true,
         "stale_access_key_quarantine": true,
         "compromised_key_responder": true
       },

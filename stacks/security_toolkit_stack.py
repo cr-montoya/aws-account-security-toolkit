@@ -94,6 +94,98 @@ class SecurityToolkitStack(cdk.Stack):
                 targets=[targets.LambdaFunction(cloudtrail_change_function)],
             )
 
+        if self._control_enabled(controls, "kms_change_notifier"):
+            kms_change_function = self._python_function(
+                "KmsChangeNotifier",
+                "kms_change_notifier.py",
+                environment=common_env,
+            )
+            topic.grant_publish(kms_change_function)
+
+            events.Rule(
+                self,
+                "KmsChangeRule",
+                rule_name=f"security-toolkit-kms-change-{stage}",
+                event_pattern=events.EventPattern(
+                    source=["aws.kms"],
+                    detail_type=["AWS API Call via CloudTrail"],
+                    detail={
+                        "eventSource": ["kms.amazonaws.com"],
+                        "eventName": [
+                            "DisableKey",
+                            "PutKeyPolicy",
+                            "ScheduleKeyDeletion",
+                        ],
+                    },
+                ),
+                targets=[targets.LambdaFunction(kms_change_function)],
+            )
+
+        if self._control_enabled(controls, "iam_posture_scanner"):
+            iam_posture_function = self._python_function(
+                "IamPostureScanner",
+                "iam_posture_scanner.py",
+                timeout=Duration.minutes(5),
+                environment=common_env,
+            )
+            topic.grant_publish(iam_posture_function)
+            iam_posture_function.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=[
+                        "iam:GenerateCredentialReport",
+                        "iam:GetCredentialReport",
+                        "iam:GetGroupPolicy",
+                        "iam:GetUserPolicy",
+                        "iam:ListAttachedGroupPolicies",
+                        "iam:ListAttachedUserPolicies",
+                        "iam:ListGroupPolicies",
+                        "iam:ListGroupsForUser",
+                        "iam:ListUserPolicies",
+                        "iam:ListUsers",
+                    ],
+                    resources=["*"],
+                )
+            )
+
+            events.Rule(
+                self,
+                "IamPostureScanSchedule",
+                rule_name=f"security-toolkit-iam-posture-scan-{stage}",
+                schedule=events.Schedule.expression(schedule_expression),
+                targets=[targets.LambdaFunction(iam_posture_function)],
+            )
+
+        if self._control_enabled(controls, "s3_public_access_guard"):
+            s3_guard_function = self._python_function(
+                "S3PublicAccessGuard",
+                "s3_public_access_guard.py",
+                timeout=Duration.minutes(5),
+                environment=common_env,
+            )
+            topic.grant_publish(s3_guard_function)
+            s3_guard_function.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=[
+                        "s3:GetAccountPublicAccessBlock",
+                        "s3:GetBucketPolicyStatus",
+                        "s3:GetBucketPublicAccessBlock",
+                        "s3:ListAllMyBuckets",
+                        "s3:PutAccountPublicAccessBlock",
+                        "s3:PutBucketPublicAccessBlock",
+                        "sts:GetCallerIdentity",
+                    ],
+                    resources=["*"],
+                )
+            )
+
+            events.Rule(
+                self,
+                "S3PublicAccessScanSchedule",
+                rule_name=f"security-toolkit-s3-public-access-scan-{stage}",
+                schedule=events.Schedule.expression(schedule_expression),
+                targets=[targets.LambdaFunction(s3_guard_function)],
+            )
+
         if self._control_enabled(controls, "stale_access_key_quarantine"):
             stale_key_function = self._python_function(
                 "StaleAccessKeyQuarantine",

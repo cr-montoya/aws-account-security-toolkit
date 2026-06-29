@@ -21,8 +21,8 @@ def test_stack_creates_core_security_controls():
 
     template = assertions.Template.from_stack(stack)
 
-    template.resource_count_is("AWS::Lambda::Function", 4)
-    template.resource_count_is("AWS::Events::Rule", 4)
+    template.resource_count_is("AWS::Lambda::Function", 7)
+    template.resource_count_is("AWS::Events::Rule", 7)
     template.resource_count_is("AWS::SNS::Topic", 1)
     template.has_resource_properties("AWS::Events::Rule", {
         "EventPattern": {
@@ -48,6 +48,20 @@ def test_stack_creates_core_security_controls():
             },
         }
     })
+    template.has_resource_properties("AWS::Events::Rule", {
+        "EventPattern": {
+            "source": ["aws.kms"],
+            "detail-type": ["AWS API Call via CloudTrail"],
+            "detail": {
+                "eventSource": ["kms.amazonaws.com"],
+                "eventName": [
+                    "DisableKey",
+                    "PutKeyPolicy",
+                    "ScheduleKeyDeletion",
+                ],
+            },
+        }
+    })
 
 
 def test_stack_can_disable_individual_controls():
@@ -65,6 +79,9 @@ def test_stack_can_disable_individual_controls():
             "controls": {
                 "root_login_notifier": False,
                 "cloudtrail_change_notifier": True,
+                "kms_change_notifier": False,
+                "iam_posture_scanner": False,
+                "s3_public_access_guard": False,
                 "stale_access_key_quarantine": False,
                 "compromised_key_responder": False,
             },
@@ -92,6 +109,9 @@ def test_stack_accepts_string_control_flags():
             "controls": {
                 "root_login_notifier": "false",
                 "cloudtrail_change_notifier": "true",
+                "kms_change_notifier": "false",
+                "iam_posture_scanner": "false",
+                "s3_public_access_guard": "false",
                 "stale_access_key_quarantine": "false",
                 "compromised_key_responder": "false",
             },

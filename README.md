@@ -1,5 +1,13 @@
 # AWS Account Security Toolkit
 
+[![CI](https://github.com/cr-montoya/aws-account-security-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/cr-montoya/aws-account-security-toolkit/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/tag/cr-montoya/aws-account-security-toolkit?label=release)](https://github.com/cr-montoya/aws-account-security-toolkit/tags)
+[![Python](https://img.shields.io/badge/python-3.12-blue)](https://www.python.org/)
+[![AWS Security](https://img.shields.io/badge/AWS-Security-orange)](https://docs.aws.amazon.com/security/)
+[![AWS CDK](https://img.shields.io/badge/AWS%20CDK-v2-orange)](https://docs.aws.amazon.com/cdk/v2/guide/home.html)
+[![uv](https://img.shields.io/badge/package%20manager-uv-5c3ee8)](https://docs.astral.sh/uv/)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 Deployable AWS security automation toolkit for account guardrails, IAM access key remediation, root login alerts, compromised credential response, and region restrictions.
 
 Security automation toolkit for AWS accounts. This project is designed as a collection of deployable guardrails and responders that help detect risky account activity, reduce credential exposure, and enforce account-level operating standards.
@@ -8,6 +16,9 @@ The toolkit starts intentionally small and practical:
 
 - Notify root user console sign-in attempts and successes.
 - Notify when CloudTrail trails are stopped, deleted, or modified.
+- Notify when KMS keys are disabled, scheduled for deletion, or have key policies changed.
+- Detect root account access keys, missing root MFA, IAM users without MFA, and IAM users with administrator access.
+- Detect weak S3 account/bucket Block Public Access settings and public bucket policies.
 - Detect IAM access keys that have not been used in 90 days and attach a deny-all quarantine policy to the IAM user.
 - Disable access keys reported by AWS Health as exposed or compromised.
 - Provide an Organizations SCP pattern to deny usage outside approved AWS Regions.
@@ -25,11 +36,16 @@ AWS account events
   +--> EventBridge: AWS API Call via CloudTrail
   |       `--> CloudTrailChangeNotifier Lambda --> SNS topic
   |
+  +--> EventBridge: AWS API Call via CloudTrail
+  |       `--> KmsChangeNotifier Lambda --> SNS topic
+  |
   +--> EventBridge: AWS Health event
   |       `--> CompromisedKeyResponder Lambda --> IAM UpdateAccessKey Inactive
   |
-  `--> EventBridge schedule
-          `--> StaleAccessKeyQuarantine Lambda --> IAM user inline deny-all policy
+  +--> EventBridge schedule
+  |       +--> IamPostureScanner Lambda --> SNS topic
+  |       +--> S3PublicAccessGuard Lambda --> SNS topic / optional Block Public Access remediation
+  |       `--> StaleAccessKeyQuarantine Lambda --> IAM user inline deny-all policy
 
 AWS Organizations
   `--> Optional SCP for approved Regions only
@@ -41,9 +57,28 @@ AWS Organizations
 |---|---|---|
 | Root sign-in notification | EventBridge + Lambda + SNS | Active |
 | CloudTrail change notification | EventBridge + Lambda + SNS | Active |
+| KMS key change notification | EventBridge + Lambda + SNS | Active |
+| IAM posture scanner | Scheduled Lambda + SNS | Active |
+| S3 public access guard | Scheduled Lambda + SNS / optional remediation | Dry run |
 | 90-day unused access key quarantine | Scheduled Lambda | Dry run |
 | AWS Health compromised key disablement | EventBridge + Lambda | Dry run |
 | Approved Regions only | SCP artifact / optional CDK Organizations policy | Disabled unless target IDs are provided |
+
+## AWS Guidance Mapping
+
+Each control is intentionally mapped to AWS security guidance, service documentation, or managed control patterns.
+
+| Toolkit control | AWS guidance behind it |
+|---|---|
+| Root sign-in notification | AWS recommends securing root credentials, enabling MFA, avoiding root access keys, and monitoring root usage in [Root user best practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/root-user-best-practices.html). |
+| IAM posture scanner | AWS recommends MFA, least privilege, temporary credentials, IAM Access Analyzer, and regular review/removal of unused users, permissions, policies, and credentials in [Security best practices in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html). |
+| Stale access key quarantine | AWS recommends relying on temporary credentials where possible and updating/removing long-term access keys using last-used information in [Security best practices in IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html). |
+| CloudTrail change notification | AWS recommends creating multi-Region trails, integrating CloudTrail with monitoring, and protecting trail configuration in [Security best practices in AWS CloudTrail](https://docs.aws.amazon.com/awscloudtrail/latest/userguide/best-practices-security.html). |
+| KMS key change notification | AWS warns that KMS key deletion is destructive after the waiting period and recommends monitoring scheduled deletion in [Delete an AWS KMS key](https://docs.aws.amazon.com/kms/latest/developerguide/deleting-keys.html). |
+| S3 public access guard | AWS recommends using S3 Block Public Access settings as centralized guardrails in [Blocking public access to your Amazon S3 storage](https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html). |
+| Compromised key responder | AWS Health events can be routed through EventBridge for operational and security response, as documented in [Monitoring events in AWS Health with Amazon EventBridge](https://docs.aws.amazon.com/health/latest/ug/cloudwatch-events-health.html). |
+| Approved Regions SCP | AWS Organizations SCPs provide central permission guardrails in [Service control policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html), and AWS policy examples use `aws:RequestedRegion` to deny actions outside selected Regions in [Deny access based on requested Region](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_examples_aws_deny-requested-region.html). |
+| Future Security Hub findings | AWS Security Hub provides the [AWS Foundational Security Best Practices standard](https://docs.aws.amazon.com/securityhub/latest/userguide/fsbp-standard.html), which this toolkit can complement with custom findings. |
 
 ## Project Structure
 
@@ -59,11 +94,17 @@ SecurityToolkit/
 |-- lambdas/
 |   |-- root_login_notifier.py
 |   |-- cloudtrail_change_notifier.py
+|   |-- kms_change_notifier.py
+|   |-- iam_posture_scanner.py
+|   |-- s3_public_access_guard.py
 |   |-- stale_access_key_quarantine.py
 |   `-- compromised_key_responder.py
 |-- tests/
 |   |-- test_root_login_notifier.py
 |   |-- test_cloudtrail_change_notifier.py
+|   |-- test_kms_change_notifier.py
+|   |-- test_iam_posture_scanner.py
+|   |-- test_s3_public_access_guard.py
 |   |-- test_stale_access_key_quarantine.py
 |   |-- test_compromised_key_responder.py
 |   `-- test_stack.py
@@ -92,6 +133,9 @@ Control flags default to enabled when omitted:
 "controls": {
   "root_login_notifier": true,
   "cloudtrail_change_notifier": true,
+  "kms_change_notifier": true,
+  "iam_posture_scanner": true,
+  "s3_public_access_guard": true,
   "stale_access_key_quarantine": true,
   "compromised_key_responder": true
 }
@@ -112,6 +156,8 @@ If `notification_email` is set, confirm the SNS subscription email after deploym
 ## Enabling Remediation
 
 The default `dry_run` value is `true`. In this mode, Lambdas log what they would do and publish notifications, but they do not quarantine users or disable keys.
+
+`dry_run` also keeps the S3 public access guard from applying account-level or bucket-level Block Public Access settings automatically.
 
 After validating logs and behavior in a sandbox account, set:
 
@@ -167,18 +213,14 @@ High-impact next controls:
 
 - Auto-enable GuardDuty across regions.
 - Auto-enable Security Hub standards.
-- Detect and quarantine public S3 buckets.
 - Detect security groups exposing SSH/RDP to `0.0.0.0/0`.
-- Detect IAM users without MFA.
 - Rotate or quarantine access keys older than a maximum age.
 - Notify on IAM policy changes that add `AdministratorAccess` or wildcard permissions.
 - Notify on creation of new access keys for IAM users.
-- Detect root account access key creation.
 
 Platform/team features:
 
 - Multi-account deployment from an AWS Organizations security account.
-- Per-control enable/disable flags in CDK context.
 - Security Hub custom findings for every responder action.
 - Slack, Teams, or PagerDuty notification targets.
 - Quarantine allowlist for break-glass users and automation roles.
