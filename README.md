@@ -313,27 +313,32 @@ The SCP denies actions outside `allowed_regions`, while exempting common global 
 
 Review [policies/deny-unapproved-regions-scp.json](policies/deny-unapproved-regions-scp.json) before applying it to production OUs.
 
-## Roadmap Ideas
+## What This Does Today
 
-High-impact next controls:
+- Deploys account-level security notifications and responders with AWS CDK.
+- Keeps remediation disabled by default through `dry_run=true`.
+- Detects root sign-ins, CloudTrail changes, KMS key changes, compromised access keys, stale access keys, IAM posture issues, S3 public exposure, and security-sensitive API changes.
+- Optionally imports custom ASFF findings into Security Hub.
+- Optionally enables single-account baseline services such as GuardDuty, Security Hub, AWS Config, IAM Access Analyzer, and S3 account-level Block Public Access.
+- Documents the AWS guidance behind each control.
 
-- Rotate or quarantine access keys older than a maximum age.
-- Detect inactive console passwords.
+## Next Enhancements
+
 - Add Slack, Teams, and PagerDuty notification targets.
-- Add Security Hub insight examples.
-
-Platform/team features:
-
-- Multi-account deployment from an AWS Organizations security account.
-- Quarantine allowlist for break-glass users and automation roles.
-- Dashboard with remediation counts and dry-run findings.
-
-Additional detections:
-
-- Alert when GuardDuty, Security Hub, AWS Config, or CloudTrail is disabled.
-- Detect console users with inactive passwords.
+- Add allowlists for break-glass users, trusted automation roles, and approved public buckets.
+- Add Security Hub Insights or saved filters for toolkit findings.
+- Detect inactive console passwords.
+- Detect and report maximum IAM access key age, separately from last-used age.
 - Detect changes to account alternate contacts.
-- Detect changes to AWS Organizations SCPs.
+- Add CloudWatch dashboard widgets for findings, dry-run actions, and remediations.
+- Add example deployment profiles such as `personal`, `audit`, and `strict`.
+
+## Later
+
+- Multi-account deployment from a security account.
+- AWS Organizations delegated administrator setup.
+- Centralized aggregation across accounts and Regions.
+- Full dashboard or web UI.
 
 ## Cleanup
 
