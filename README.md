@@ -46,9 +46,9 @@ AWS account events
   |       `--> CompromisedKeyResponder Lambda --> IAM UpdateAccessKey Inactive
   |
   +--> EventBridge schedule
-|       +--> IamPostureScanner Lambda --> SNS topic
-|       +--> S3PublicAccessGuard Lambda --> SNS topic / optional Block Public Access remediation
-|       `--> StaleAccessKeyQuarantine Lambda --> IAM user inline deny-all policy
+  |       +--> IamPostureScanner Lambda --> SNS topic
+  |       +--> S3PublicAccessGuard Lambda --> SNS topic / optional Block Public Access remediation
+  |       `--> StaleAccessKeyQuarantine Lambda --> IAM user inline deny-all policy
   |
   `--> EventBridge: security-sensitive API changes
           `--> SensitiveApiChangeNotifier Lambda --> SNS topic / optional Security Hub finding
@@ -72,6 +72,74 @@ AWS Organizations
 | 90-day unused access key quarantine | Scheduled Lambda | Dry run |
 | AWS Health compromised key disablement | EventBridge + Lambda | Dry run |
 | Approved Regions only | SCP artifact / optional CDK Organizations policy | Disabled unless target IDs are provided |
+
+## Personal Account Quickstart
+
+For a personal AWS account, start with the default safety posture:
+
+- Keep `dry_run=true`.
+- Keep `security_hub_findings_enabled=false`.
+- Keep every `security_baseline` flag set to `false`.
+- Set `notification_email` so SNS can email you alerts.
+- Deploy only after reviewing `cdk synth`.
+
+This gives you a practical monitoring layer without enabling paid security services or applying remediation automatically.
+
+Recommended personal-account flow:
+
+```bash
+uv sync --all-groups
+npx -y aws-cdk@latest synth
+npx -y aws-cdk@latest deploy
+```
+
+After deploy, confirm the SNS subscription email. Then watch alerts for a few days before enabling remediation or baseline services.
+
+Good first controls for a personal account:
+
+- Root sign-in notification.
+- CloudTrail and KMS change notification.
+- IAM posture scanner.
+- S3 public access guard in dry-run mode.
+- Sensitive API change notification.
+- Stale access key quarantine in dry-run mode.
+
+## Advanced Options and Impact
+
+Some options change account-level security services, create recurring service usage, or apply remediation. Enable them deliberately.
+
+| Option | What it does | Possible impact |
+|---|---|---|
+| `dry_run=false` | Allows remediation actions such as IAM quarantine and S3 Block Public Access updates. | Can deny IAM user actions or change S3 public access settings. Test in a sandbox first. |
+| `security_hub_findings_enabled=true` | Imports toolkit findings into Security Hub using ASFF. | Requires Security Hub to be enabled. Security Hub may incur service charges. |
+| `security_baseline.enable_guardduty=true` | Creates a GuardDuty detector. | GuardDuty may incur charges based on analyzed events and data sources. |
+| `security_baseline.enable_security_hub=true` | Enables Security Hub. | Security Hub may incur charges for checks, findings, and enabled standards. |
+| `security_baseline.enable_security_hub_fsbp=true` | Subscribes to AWS Foundational Security Best Practices when Security Hub is enabled. | Can produce many findings in existing accounts. Useful, but noisy at first. |
+| `security_baseline.enable_config=true` | Creates AWS Config recorder, delivery bucket, and delivery channel. | AWS Config may incur charges for configuration items and rule evaluations. Creates an S3 bucket. |
+| `security_baseline.enable_access_analyzer=true` | Creates an account-level IAM Access Analyzer. | Usually low-friction, but it can produce findings for external access that need triage. |
+| `security_baseline.enable_s3_account_public_access_block=true` | Applies account-level S3 Block Public Access. | Can break intentional public S3 website or public bucket use cases. |
+| `organization_target_ids` | Creates and attaches the approved Regions SCP to listed OU/account/root targets. | Requires Organizations permissions and can block workloads in unapproved Regions. |
+
+For a stronger personal account setup, a reasonable next step is:
+
+```json
+"security_baseline": {
+  "enable_guardduty": true,
+  "enable_security_hub": true,
+  "enable_security_hub_fsbp": true,
+  "enable_config": false,
+  "enable_access_analyzer": true,
+  "enable_s3_account_public_access_block": true
+}
+```
+
+Then, after Security Hub is enabled and stable:
+
+```json
+"security_hub_findings_enabled": true
+```
+
+Treat `enable_config=true` as a more deliberate step because it creates a recorder and delivery bucket and can add recurring cost.
 
 ## AWS Guidance Mapping
 
