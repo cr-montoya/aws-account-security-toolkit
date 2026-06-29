@@ -47,6 +47,7 @@ SecurityToolkit/
 |-- app.py
 |-- cdk.json
 |-- requirements.txt
+|-- requirements-dev.txt
 |-- README.md
 |-- stacks/
 |   `-- security_toolkit_stack.py
@@ -54,6 +55,11 @@ SecurityToolkit/
 |   |-- root_login_notifier.py
 |   |-- stale_access_key_quarantine.py
 |   `-- compromised_key_responder.py
+|-- tests/
+|   |-- test_root_login_notifier.py
+|   |-- test_stale_access_key_quarantine.py
+|   |-- test_compromised_key_responder.py
+|   `-- test_stack.py
 `-- policies/
     `-- deny-unapproved-regions-scp.json
 ```
@@ -98,6 +104,19 @@ After validating logs and behavior in a sandbox account, set:
 
 Then redeploy.
 
+## Testing
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-dev.txt
+
+python -m pytest tests -q
+cdk synth
+```
+
+The unit tests validate Lambda responder behavior with fake AWS clients and verify that the CDK stack creates the expected core resources.
+
 ## Approved Regions SCP
 
 The stack can create an AWS Organizations SCP if `organization_target_ids` is not empty. Deploy this only from an Organizations management account or delegated admin account with the right permissions.
@@ -108,24 +127,34 @@ Review [policies/deny-unapproved-regions-scp.json](policies/deny-unapproved-regi
 
 ## Roadmap Ideas
 
-Good next controls for this toolkit:
+High-impact next controls:
 
 - Alert when CloudTrail is stopped, deleted, or modified.
-- Alert when GuardDuty, Security Hub, AWS Config, or CloudTrail is disabled.
 - Auto-enable GuardDuty across regions.
 - Auto-enable Security Hub standards.
 - Detect and quarantine public S3 buckets.
 - Detect security groups exposing SSH/RDP to `0.0.0.0/0`.
 - Detect IAM users without MFA.
-- Detect console users with inactive passwords.
 - Rotate or quarantine access keys older than a maximum age.
 - Notify on IAM policy changes that add `AdministratorAccess` or wildcard permissions.
 - Notify on creation of new access keys for IAM users.
 - Detect root account access key creation.
+
+Platform/team features:
+
+- Multi-account deployment from an AWS Organizations security account.
+- Per-control enable/disable flags in CDK context.
+- Security Hub custom findings for every responder action.
+- Slack, Teams, or PagerDuty notification targets.
+- Quarantine allowlist for break-glass users and automation roles.
+- Dashboard with remediation counts and dry-run findings.
+
+Additional detections:
+
+- Alert when GuardDuty, Security Hub, AWS Config, or CloudTrail is disabled.
+- Detect console users with inactive passwords.
 - Detect changes to account alternate contacts.
 - Detect changes to AWS Organizations SCPs.
-- Centralize findings into Security Hub custom findings.
-- Send high-severity notifications to Slack, Teams, or PagerDuty.
 
 ## Cleanup
 

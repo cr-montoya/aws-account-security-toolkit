@@ -5,8 +5,12 @@ import re
 import boto3
 
 
-iam = boto3.client("iam")
-sns = boto3.client("sns")
+def get_iam():
+    return boto3.client("iam")
+
+
+def get_sns():
+    return boto3.client("sns")
 ACCESS_KEY_RE = re.compile(r"\b(AKIA|ASIA)[A-Z0-9]{16}\b")
 
 
@@ -15,9 +19,10 @@ def lambda_handler(event, context):
     access_key_ids = sorted(_extract_access_key_ids(event))
     disabled = []
     unresolved = []
+    iam = get_iam()
 
     for access_key_id in access_key_ids:
-        user_name = _find_user_for_access_key(access_key_id)
+        user_name = _find_user_for_access_key(iam, access_key_id)
         if not user_name:
             unresolved.append(access_key_id)
             continue
@@ -60,7 +65,7 @@ def _extract_access_key_ids(event):
     return keys
 
 
-def _find_user_for_access_key(access_key_id):
+def _find_user_for_access_key(iam, access_key_id):
     paginator = iam.get_paginator("list_users")
     for page in paginator.paginate():
         for user in page.get("Users", []):
@@ -72,7 +77,7 @@ def _find_user_for_access_key(access_key_id):
 
 
 def _notify(disabled, unresolved, event):
-    sns.publish(
+    get_sns().publish(
         TopicArn=os.environ["ALERT_TOPIC_ARN"],
         Subject="AWS compromised access key responder",
         Message=json.dumps({

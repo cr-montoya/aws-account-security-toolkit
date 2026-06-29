@@ -5,8 +5,12 @@ from datetime import datetime, timezone
 import boto3
 
 
-iam = boto3.client("iam")
-sns = boto3.client("sns")
+def get_iam():
+    return boto3.client("iam")
+
+
+def get_sns():
+    return boto3.client("sns")
 
 DENY_ALL_POLICY = {
     "Version": "2012-10-17",
@@ -27,12 +31,13 @@ def lambda_handler(event, context):
     policy_name = os.environ.get("QUARANTINE_POLICY_NAME", "SecurityToolkitDenyAllDueToStaleAccessKey")
     now = datetime.now(timezone.utc)
     quarantined = []
+    iam = get_iam()
 
     paginator = iam.get_paginator("list_users")
     for page in paginator.paginate():
         for user in page.get("Users", []):
             user_name = user["UserName"]
-            stale_keys = _stale_active_keys(user_name, now, stale_key_days)
+            stale_keys = _stale_active_keys(iam, user_name, now, stale_key_days)
             if not stale_keys:
                 continue
 
@@ -67,7 +72,7 @@ def lambda_handler(event, context):
     }
 
 
-def _stale_active_keys(user_name, now, stale_key_days):
+def _stale_active_keys(iam, user_name, now, stale_key_days):
     stale_keys = []
     response = iam.list_access_keys(UserName=user_name)
 
@@ -94,7 +99,7 @@ def _stale_active_keys(user_name, now, stale_key_days):
 
 
 def _notify(quarantined):
-    sns.publish(
+    get_sns().publish(
         TopicArn=os.environ["ALERT_TOPIC_ARN"],
         Subject="AWS stale access key quarantine report",
         Message=json.dumps({

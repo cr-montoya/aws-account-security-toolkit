@@ -4,7 +4,8 @@ import os
 import boto3
 
 
-sns = boto3.client("sns")
+def get_sns():
+    return boto3.client("sns")
 
 
 def lambda_handler(event, context):
@@ -26,7 +27,7 @@ def lambda_handler(event, context):
         "event": event,
     }
 
-    sns.publish(
+    get_sns().publish(
         TopicArn=os.environ["ALERT_TOPIC_ARN"],
         Subject=subject[:100],
         Message=json.dumps(message, indent=2, default=str),
