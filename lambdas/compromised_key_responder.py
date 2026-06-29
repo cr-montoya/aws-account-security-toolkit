@@ -3,6 +3,7 @@ import os
 import re
 
 import boto3
+import security_hub
 
 
 def get_iam():
@@ -43,6 +44,11 @@ def lambda_handler(event, context):
 
     if disabled or unresolved:
         _notify(disabled, unresolved, event)
+        security_hub.import_findings(
+            _security_hub_findings(disabled, unresolved),
+            account_id=event.get("account"),
+            region=event.get("region"),
+        )
 
     return {
         "dry_run": dry_run,
@@ -87,3 +93,30 @@ def _notify(disabled, unresolved, event):
             "event": event,
         }, indent=2, default=str),
     )
+
+
+def _security_hub_findings(disabled, unresolved):
+    findings = []
+    for action in disabled:
+        findings.append({
+            "control": "compromised_access_key_disabled",
+            "severity": "CRITICAL",
+            "resource": action["access_key_id"],
+            "resource_type": "AwsIamAccessKey",
+            "title": "AWS Health reported a compromised IAM access key",
+            "detail": f"AWS Health reported access key {action['access_key_id']} for IAM user {action['user_name']}.",
+            "remediation": "Rotate credentials, investigate usage, and confirm the key is inactive.",
+            "guidance_url": "https://docs.aws.amazon.com/health/latest/ug/cloudwatch-events-health.html",
+        })
+    for access_key_id in unresolved:
+        findings.append({
+            "control": "compromised_access_key_unresolved",
+            "severity": "HIGH",
+            "resource": access_key_id,
+            "resource_type": "AwsIamAccessKey",
+            "title": "AWS Health reported an access key that could not be mapped",
+            "detail": f"Access key {access_key_id} was reported by AWS Health but no IAM user was found.",
+            "remediation": "Investigate the key manually and confirm it is inactive or deleted.",
+            "guidance_url": "https://docs.aws.amazon.com/health/latest/ug/cloudwatch-events-health.html",
+        })
+    return findings

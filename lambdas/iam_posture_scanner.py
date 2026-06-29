@@ -5,6 +5,7 @@ import os
 from urllib.parse import unquote
 
 import boto3
+import security_hub
 
 ADMINISTRATOR_ACCESS_ARN = "arn:aws:iam::aws:policy/AdministratorAccess"
 
@@ -26,6 +27,7 @@ def lambda_handler(event, context):
 
     if findings:
         _notify(findings)
+        security_hub.import_findings(findings)
 
     return {
         "finding_count": len(findings),
@@ -50,14 +52,22 @@ def _credential_report_findings(iam):
                     "control": "root_mfa_enabled",
                     "severity": "CRITICAL",
                     "resource": "root_account",
+                    "resource_type": "AwsAccount",
+                    "title": "Root account MFA is not enabled",
                     "detail": "Root account MFA is not enabled.",
+                    "remediation": "Enable MFA on the AWS account root user.",
+                    "guidance_url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/root-user-best-practices.html",
                 })
             if access_key_1_active or access_key_2_active:
                 findings.append({
                     "control": "root_access_keys_absent",
                     "severity": "CRITICAL",
                     "resource": "root_account",
+                    "resource_type": "AwsIamAccessKey",
+                    "title": "Root account has active access keys",
                     "detail": "Root account has one or more active access keys.",
+                    "remediation": "Delete root user access keys and use IAM roles or temporary credentials instead.",
+                    "guidance_url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/root-user-best-practices.html",
                 })
             continue
 
@@ -66,7 +76,11 @@ def _credential_report_findings(iam):
                 "control": "iam_user_mfa_enabled",
                 "severity": "HIGH",
                 "resource": user,
+                "resource_type": "AwsIamUser",
+                "title": "IAM user console access is missing MFA",
                 "detail": "IAM user has console password enabled without MFA.",
+                "remediation": "Enable MFA for the IAM user or remove console password access.",
+                "guidance_url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html",
             })
 
     return findings
@@ -94,7 +108,11 @@ def _admin_access_findings(iam):
                     "control": "iam_user_administrator_access",
                     "severity": "HIGH",
                     "resource": user_name,
+                    "resource_type": "AwsIamUser",
+                    "title": "IAM user has administrator access",
                     "detail": "IAM user has direct, group, or inline administrator access.",
+                    "remediation": "Replace direct administrator access with scoped roles and least-privilege policies.",
+                    "guidance_url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html",
                 })
 
     return findings

@@ -2,6 +2,7 @@ import json
 import os
 
 import boto3
+import security_hub
 
 PUBLIC_ACCESS_BLOCK = {
     "BlockPublicAcls": True,
@@ -40,7 +41,11 @@ def lambda_handler(event, context):
             "control": "s3_account_public_access_block",
             "severity": "HIGH",
             "resource": account_id,
+            "resource_type": "AwsAccount",
+            "title": "S3 account-level Block Public Access is incomplete",
             "detail": "Account-level S3 Block Public Access is missing or incomplete.",
+            "remediation": "Enable all four account-level S3 Block Public Access settings.",
+            "guidance_url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html",
         })
         if not dry_run:
             s3control.put_public_access_block(
@@ -59,7 +64,11 @@ def lambda_handler(event, context):
                 "control": "s3_bucket_public_access_block",
                 "severity": "HIGH",
                 "resource": bucket_name,
+                "resource_type": "AwsS3Bucket",
+                "title": "S3 bucket Block Public Access is incomplete",
                 "detail": "Bucket-level S3 Block Public Access is missing or incomplete.",
+                "remediation": "Enable all four bucket-level S3 Block Public Access settings.",
+                "guidance_url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html",
             })
             if not dry_run:
                 s3.put_public_access_block(
@@ -76,11 +85,16 @@ def lambda_handler(event, context):
                 "control": "s3_bucket_policy_not_public",
                 "severity": "CRITICAL",
                 "resource": bucket_name,
+                "resource_type": "AwsS3Bucket",
+                "title": "S3 bucket policy is public",
                 "detail": "Bucket policy status reports the bucket as public.",
+                "remediation": "Review the bucket policy and remove public access unless explicitly approved.",
+                "guidance_url": "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html",
             })
 
     if findings:
         _notify(dry_run, findings, remediation_actions)
+        security_hub.import_findings(findings, account_id=account_id)
 
     return {
         "dry_run": dry_run,

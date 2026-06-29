@@ -3,6 +3,7 @@ import os
 from datetime import UTC, datetime
 
 import boto3
+import security_hub
 
 
 def get_iam():
@@ -64,6 +65,7 @@ def lambda_handler(event, context):
 
     if quarantined:
         _notify(quarantined)
+        security_hub.import_findings(_security_hub_findings(quarantined))
 
     return {
         "dry_run": dry_run,
@@ -107,3 +109,20 @@ def _notify(quarantined):
             "quarantined_users": quarantined,
         }, indent=2, default=str),
     )
+
+
+def _security_hub_findings(quarantined):
+    findings = []
+    for action in quarantined:
+        for key in action["stale_access_keys"]:
+            findings.append({
+                "control": "stale_access_key_detected",
+                "severity": "HIGH",
+                "resource": key["access_key_id"],
+                "resource_type": "AwsIamAccessKey",
+                "title": "Stale IAM access key detected",
+                "detail": f"IAM user {action['user_name']} has an active access key unused for {key['age_days']} days.",
+                "remediation": "Rotate or remove the access key, and prefer temporary credentials for workloads.",
+                "guidance_url": "https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html",
+            })
+    return findings

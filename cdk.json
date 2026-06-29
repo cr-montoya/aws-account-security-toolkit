@@ -5,6 +5,7 @@
       "stage": "dev",
       "notification_email": "",
       "dry_run": true,
+      "security_hub_findings_enabled": false,
       "stale_key_days": 90,
       "schedule_expression": "rate(1 day)",
       "controls": {
@@ -13,8 +14,17 @@
         "kms_change_notifier": true,
         "iam_posture_scanner": true,
         "s3_public_access_guard": true,
+        "sensitive_api_change_notifier": true,
         "stale_access_key_quarantine": true,
         "compromised_key_responder": true
+      },
+      "security_baseline": {
+        "enable_guardduty": false,
+        "enable_security_hub": false,
+        "enable_security_hub_fsbp": true,
+        "enable_config": false,
+        "enable_access_analyzer": false,
+        "enable_s3_account_public_access_block": false
       },
       "allowed_regions": [
         "us-east-1",

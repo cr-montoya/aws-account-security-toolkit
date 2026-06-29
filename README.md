@@ -19,6 +19,9 @@ The toolkit starts intentionally small and practical:
 - Notify when KMS keys are disabled, scheduled for deletion, or have key policies changed.
 - Detect root account access keys, missing root MFA, IAM users without MFA, and IAM users with administrator access.
 - Detect weak S3 account/bucket Block Public Access settings and public bucket policies.
+- Publish optional custom findings to AWS Security Hub using ASFF.
+- Optionally bootstrap single-account security services such as GuardDuty, Security Hub, AWS Config, IAM Access Analyzer, and S3 account-level Block Public Access.
+- Alert on security-sensitive IAM, S3, EC2 security group, GuardDuty, Security Hub, AWS Config, and Organizations API changes.
 - Detect IAM access keys that have not been used in 90 days and attach a deny-all quarantine policy to the IAM user.
 - Disable access keys reported by AWS Health as exposed or compromised.
 - Provide an Organizations SCP pattern to deny usage outside approved AWS Regions.
@@ -43,9 +46,12 @@ AWS account events
   |       `--> CompromisedKeyResponder Lambda --> IAM UpdateAccessKey Inactive
   |
   +--> EventBridge schedule
-  |       +--> IamPostureScanner Lambda --> SNS topic
-  |       +--> S3PublicAccessGuard Lambda --> SNS topic / optional Block Public Access remediation
-  |       `--> StaleAccessKeyQuarantine Lambda --> IAM user inline deny-all policy
+|       +--> IamPostureScanner Lambda --> SNS topic
+|       +--> S3PublicAccessGuard Lambda --> SNS topic / optional Block Public Access remediation
+|       `--> StaleAccessKeyQuarantine Lambda --> IAM user inline deny-all policy
+  |
+  `--> EventBridge: security-sensitive API changes
+          `--> SensitiveApiChangeNotifier Lambda --> SNS topic / optional Security Hub finding
 
 AWS Organizations
   `--> Optional SCP for approved Regions only
@@ -60,6 +66,9 @@ AWS Organizations
 | KMS key change notification | EventBridge + Lambda + SNS | Active |
 | IAM posture scanner | Scheduled Lambda + SNS | Active |
 | S3 public access guard | Scheduled Lambda + SNS / optional remediation | Dry run |
+| Sensitive API change notification | EventBridge + Lambda + SNS | Active |
+| Security Hub custom findings | ASFF import for detected findings | Disabled until enabled |
+| Security services baseline | GuardDuty, Security Hub, AWS Config, IAM Access Analyzer, S3 account BPA | Disabled until enabled |
 | 90-day unused access key quarantine | Scheduled Lambda | Dry run |
 | AWS Health compromised key disablement | EventBridge + Lambda | Dry run |
 | Approved Regions only | SCP artifact / optional CDK Organizations policy | Disabled unless target IDs are provided |
@@ -78,7 +87,8 @@ Each control is intentionally mapped to AWS security guidance, service documenta
 | S3 public access guard | AWS recommends using S3 Block Public Access settings as centralized guardrails in [Blocking public access to your Amazon S3 storage](https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html). |
 | Compromised key responder | AWS Health events can be routed through EventBridge for operational and security response, as documented in [Monitoring events in AWS Health with Amazon EventBridge](https://docs.aws.amazon.com/health/latest/ug/cloudwatch-events-health.html). |
 | Approved Regions SCP | AWS Organizations SCPs provide central permission guardrails in [Service control policies](https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_policies_scps.html), and AWS policy examples use `aws:RequestedRegion` to deny actions outside selected Regions in [Deny access based on requested Region](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_examples_aws_deny-requested-region.html). |
-| Future Security Hub findings | AWS Security Hub provides the [AWS Foundational Security Best Practices standard](https://docs.aws.amazon.com/securityhub/latest/userguide/fsbp-standard.html), which this toolkit can complement with custom findings. |
+| Sensitive API change notification | AWS Security Hub FSBP and CIS-style controls emphasize monitoring security group, IAM, S3, Config, GuardDuty, and Security Hub changes in [AWS Foundational Security Best Practices](https://docs.aws.amazon.com/securityhub/latest/userguide/fsbp-standard.html). |
+| Security Hub findings | AWS Security Hub supports custom findings in ASFF, complementing the [AWS Foundational Security Best Practices standard](https://docs.aws.amazon.com/securityhub/latest/userguide/fsbp-standard.html). |
 
 ## Project Structure
 
@@ -97,6 +107,8 @@ SecurityToolkit/
 |   |-- kms_change_notifier.py
 |   |-- iam_posture_scanner.py
 |   |-- s3_public_access_guard.py
+|   |-- sensitive_api_change_notifier.py
+|   |-- security_hub.py
 |   |-- stale_access_key_quarantine.py
 |   `-- compromised_key_responder.py
 |-- tests/
@@ -105,6 +117,8 @@ SecurityToolkit/
 |   |-- test_kms_change_notifier.py
 |   |-- test_iam_posture_scanner.py
 |   |-- test_s3_public_access_guard.py
+|   |-- test_sensitive_api_change_notifier.py
+|   |-- test_security_hub.py
 |   |-- test_stale_access_key_quarantine.py
 |   |-- test_compromised_key_responder.py
 |   `-- test_stack.py
@@ -121,9 +135,11 @@ Configuration is read from CDK context in `cdk.json`.
 | `security_toolkit.stage` | Naming suffix, usually `dev`, `audit`, or `prod` |
 | `security_toolkit.notification_email` | Optional email subscribed to the SNS topic |
 | `security_toolkit.dry_run` | Keeps remediation actions from changing IAM state |
+| `security_toolkit.security_hub_findings_enabled` | Imports toolkit findings into Security Hub when Security Hub is enabled |
 | `security_toolkit.stale_key_days` | Age threshold for access key quarantine |
 | `security_toolkit.schedule_expression` | EventBridge schedule for stale-key checks |
 | `security_toolkit.controls` | Per-control enable/disable flags |
+| `security_toolkit.security_baseline` | Optional single-account baseline service enablement |
 | `security_toolkit.allowed_regions` | Regions allowed by the SCP |
 | `security_toolkit.organization_target_ids` | Optional OU/account/root IDs to attach the SCP |
 
@@ -136,10 +152,26 @@ Control flags default to enabled when omitted:
   "kms_change_notifier": true,
   "iam_posture_scanner": true,
   "s3_public_access_guard": true,
+  "sensitive_api_change_notifier": true,
   "stale_access_key_quarantine": true,
   "compromised_key_responder": true
 }
 ```
+
+Security baseline flags default to disabled to avoid surprise cost or service state changes:
+
+```json
+"security_baseline": {
+  "enable_guardduty": false,
+  "enable_security_hub": false,
+  "enable_security_hub_fsbp": true,
+  "enable_config": false,
+  "enable_access_analyzer": false,
+  "enable_s3_account_public_access_block": false
+}
+```
+
+Set `security_hub_findings_enabled` to `true` only after Security Hub is enabled in the target account.
 
 ## Deploy
 
@@ -177,6 +209,12 @@ npx -y aws-cdk@latest synth
 
 The unit tests validate Lambda responder behavior with fake AWS clients and verify that the CDK stack creates the expected core resources.
 
+Additional documentation:
+
+- [Architecture](docs/architecture.md)
+- [Control catalog](docs/control-catalog.md)
+- [Changelog](CHANGELOG.md)
+
 ## Development
 
 This project uses `uv` for Python dependency management. Common commands:
@@ -211,18 +249,14 @@ Review [policies/deny-unapproved-regions-scp.json](policies/deny-unapproved-regi
 
 High-impact next controls:
 
-- Auto-enable GuardDuty across regions.
-- Auto-enable Security Hub standards.
-- Detect security groups exposing SSH/RDP to `0.0.0.0/0`.
 - Rotate or quarantine access keys older than a maximum age.
-- Notify on IAM policy changes that add `AdministratorAccess` or wildcard permissions.
-- Notify on creation of new access keys for IAM users.
+- Detect inactive console passwords.
+- Add Slack, Teams, and PagerDuty notification targets.
+- Add Security Hub insight examples.
 
 Platform/team features:
 
 - Multi-account deployment from an AWS Organizations security account.
-- Security Hub custom findings for every responder action.
-- Slack, Teams, or PagerDuty notification targets.
 - Quarantine allowlist for break-glass users and automation roles.
 - Dashboard with remediation counts and dry-run findings.
 

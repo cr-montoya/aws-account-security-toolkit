@@ -1,0 +1,26 @@
+name: Control request
+description: Propose a new AWS security control or responder.
+title: "[Control]: "
+labels: ["enhancement", "security-control"]
+body:
+  - type: textarea
+    id: control
+    attributes:
+      label: Control Idea
+      description: What should the toolkit detect, prevent, or remediate?
+    validations:
+      required: true
+  - type: input
+    id: aws_guidance
+    attributes:
+      label: AWS Guidance Link
+      description: Link to AWS docs, Security Hub control, Well-Architected guidance, or similar.
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Desired Behavior
+      description: Alert only, dry-run remediation, or active remediation?
+    validations:
+      required: true

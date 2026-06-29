@@ -3,12 +3,17 @@ from pathlib import Path
 
 import aws_cdk as cdk
 from aws_cdk import Duration
+from aws_cdk import aws_accessanalyzer as accessanalyzer
+from aws_cdk import aws_config as config
 from aws_cdk import aws_events as events
 from aws_cdk import aws_events_targets as targets
+from aws_cdk import aws_guardduty as guardduty
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_organizations as organizations
+from aws_cdk import aws_s3 as s3
+from aws_cdk import aws_securityhub as securityhub
 from aws_cdk import aws_sns as sns
 from aws_cdk import aws_sns_subscriptions as subscriptions
 from constructs import Construct
@@ -26,6 +31,8 @@ class SecurityToolkitStack(cdk.Stack):
         allowed_regions = config.get("allowed_regions", ["us-east-1", "us-east-2"])
         organization_target_ids = config.get("organization_target_ids", [])
         controls = config.get("controls", {})
+        security_baseline = config.get("security_baseline", {})
+        security_hub_findings_enabled = str(config.get("security_hub_findings_enabled", False)).lower()
 
         topic = sns.Topic(
             self,
@@ -40,7 +47,11 @@ class SecurityToolkitStack(cdk.Stack):
         common_env = {
             "ALERT_TOPIC_ARN": topic.topic_arn,
             "DRY_RUN": dry_run,
+            "SECURITY_HUB_FINDINGS_ENABLED": security_hub_findings_enabled,
+            "TOOLKIT_AWS_ACCOUNT_ID": cdk.Aws.ACCOUNT_ID,
         }
+
+        self._add_security_baseline(stage, security_baseline)
 
         if self._control_enabled(controls, "root_login_notifier"):
             root_login_function = self._python_function(
@@ -178,6 +189,129 @@ class SecurityToolkitStack(cdk.Stack):
                 )
             )
 
+        if self._control_enabled(controls, "sensitive_api_change_notifier"):
+            sensitive_api_function = self._python_function(
+                "SensitiveApiChangeNotifier",
+                "sensitive_api_change_notifier.py",
+                environment=common_env,
+            )
+            topic.grant_publish(sensitive_api_function)
+
+            events.Rule(
+                self,
+                "IamSensitiveChangeRule",
+                rule_name=f"security-toolkit-iam-sensitive-change-{stage}",
+                event_pattern=events.EventPattern(
+                    source=["aws.iam"],
+                    detail_type=["AWS API Call via CloudTrail"],
+                    detail={
+                        "eventSource": ["iam.amazonaws.com"],
+                        "eventName": [
+                            "AttachGroupPolicy",
+                            "AttachUserPolicy",
+                            "CreateAccessKey",
+                            "CreatePolicyVersion",
+                            "PutGroupPolicy",
+                            "PutUserPolicy",
+                            "SetDefaultPolicyVersion",
+                            "UpdateAssumeRolePolicy",
+                        ],
+                    },
+                ),
+                targets=[targets.LambdaFunction(sensitive_api_function)],
+            )
+
+            events.Rule(
+                self,
+                "S3SensitiveChangeRule",
+                rule_name=f"security-toolkit-s3-sensitive-change-{stage}",
+                event_pattern=events.EventPattern(
+                    source=["aws.s3", "aws.s3control"],
+                    detail_type=["AWS API Call via CloudTrail"],
+                    detail={
+                        "eventSource": ["s3.amazonaws.com", "s3control.amazonaws.com"],
+                        "eventName": [
+                            "DeleteAccountPublicAccessBlock",
+                            "DeleteBucketPolicy",
+                            "DeleteBucketPublicAccessBlock",
+                            "PutAccountPublicAccessBlock",
+                            "PutBucketAcl",
+                            "PutBucketPolicy",
+                            "PutBucketPublicAccessBlock",
+                        ],
+                    },
+                ),
+                targets=[targets.LambdaFunction(sensitive_api_function)],
+            )
+
+            events.Rule(
+                self,
+                "NetworkExposureChangeRule",
+                rule_name=f"security-toolkit-network-exposure-change-{stage}",
+                event_pattern=events.EventPattern(
+                    source=["aws.ec2"],
+                    detail_type=["AWS API Call via CloudTrail"],
+                    detail={
+                        "eventSource": ["ec2.amazonaws.com"],
+                        "eventName": [
+                            "AuthorizeSecurityGroupIngress",
+                            "ModifySecurityGroupRules",
+                            "RevokeSecurityGroupIngress",
+                            "UpdateSecurityGroupRuleDescriptionsIngress",
+                        ],
+                    },
+                ),
+                targets=[targets.LambdaFunction(sensitive_api_function)],
+            )
+
+            events.Rule(
+                self,
+                "SecurityServiceChangeRule",
+                rule_name=f"security-toolkit-security-service-change-{stage}",
+                event_pattern=events.EventPattern(
+                    detail_type=["AWS API Call via CloudTrail"],
+                    detail={
+                        "eventSource": [
+                            "config.amazonaws.com",
+                            "guardduty.amazonaws.com",
+                            "securityhub.amazonaws.com",
+                        ],
+                        "eventName": [
+                            "BatchDisableStandards",
+                            "DeleteConfigurationRecorder",
+                            "DeleteDeliveryChannel",
+                            "DeleteDetector",
+                            "DisableSecurityHub",
+                            "StopConfigurationRecorder",
+                            "UpdateDetector",
+                        ],
+                    },
+                ),
+                targets=[targets.LambdaFunction(sensitive_api_function)],
+            )
+
+            events.Rule(
+                self,
+                "OrganizationsPolicyChangeRule",
+                rule_name=f"security-toolkit-organizations-policy-change-{stage}",
+                event_pattern=events.EventPattern(
+                    source=["aws.organizations"],
+                    detail_type=["AWS API Call via CloudTrail"],
+                    detail={
+                        "eventSource": ["organizations.amazonaws.com"],
+                        "eventName": [
+                            "AttachPolicy",
+                            "CreatePolicy",
+                            "DeletePolicy",
+                            "DetachPolicy",
+                            "DisablePolicyType",
+                            "UpdatePolicy",
+                        ],
+                    },
+                ),
+                targets=[targets.LambdaFunction(sensitive_api_function)],
+            )
+
             events.Rule(
                 self,
                 "S3PublicAccessScanSchedule",
@@ -284,7 +418,7 @@ class SecurityToolkitStack(cdk.Stack):
             removal_policy=cdk.RemovalPolicy.DESTROY,
         )
 
-        return lambda_.Function(
+        function = lambda_.Function(
             self,
             construct_id,
             runtime=lambda_.Runtime.PYTHON_3_12,
@@ -298,8 +432,119 @@ class SecurityToolkitStack(cdk.Stack):
             tracing=lambda_.Tracing.ACTIVE,
         )
 
-    def _control_enabled(self, controls: dict, control_name: str) -> bool:
-        value = controls.get(control_name, True)
+        if environment.get("SECURITY_HUB_FINDINGS_ENABLED") == "true":
+            function.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=["securityhub:BatchImportFindings"],
+                    resources=["*"],
+                )
+            )
+
+        return function
+
+    def _add_security_baseline(self, stage: str, baseline: dict) -> None:
+        if self._control_enabled(baseline, "enable_guardduty", default=False):
+            guardduty.CfnDetector(
+                self,
+                "GuardDutyDetector",
+                enable=True,
+                finding_publishing_frequency="FIFTEEN_MINUTES",
+            )
+
+        if self._control_enabled(baseline, "enable_security_hub", default=False):
+            hub = securityhub.CfnHub(
+                self,
+                "SecurityHub",
+                enable_default_standards=False,
+            )
+            if self._control_enabled(baseline, "enable_security_hub_fsbp", default=True):
+                fsbp = securityhub.CfnStandard(
+                    self,
+                    "SecurityHubFoundationalSecurityBestPractices",
+                    standards_arn=(
+                        f"arn:{cdk.Aws.PARTITION}:securityhub:{cdk.Aws.REGION}"
+                        "::standards/aws-foundational-security-best-practices/v/1.0.0"
+                    ),
+                )
+                fsbp.add_dependency(hub)
+
+        if self._control_enabled(baseline, "enable_access_analyzer", default=False):
+            accessanalyzer.CfnAnalyzer(
+                self,
+                "AccountAccessAnalyzer",
+                analyzer_name=f"security-toolkit-account-analyzer-{stage}",
+                type="ACCOUNT",
+            )
+
+        if self._control_enabled(baseline, "enable_s3_account_public_access_block", default=False):
+            cdk.CfnResource(
+                self,
+                "S3AccountPublicAccessBlock",
+                type="AWS::S3::AccountPublicAccessBlock",
+                properties={
+                    "PublicAccessBlockConfiguration": {
+                        "BlockPublicAcls": True,
+                        "BlockPublicPolicy": True,
+                        "IgnorePublicAcls": True,
+                        "RestrictPublicBuckets": True,
+                    }
+                },
+            )
+
+        if self._control_enabled(baseline, "enable_config", default=False):
+            self._add_config_baseline(stage)
+
+    def _add_config_baseline(self, stage: str) -> None:
+        config_bucket = s3.Bucket(
+            self,
+            "ConfigDeliveryBucket",
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            enforce_ssl=True,
+            versioned=True,
+        )
+        config_bucket.add_to_resource_policy(
+            iam.PolicyStatement(
+                actions=["s3:GetBucketAcl", "s3:ListBucket"],
+                principals=[iam.ServicePrincipal("config.amazonaws.com")],
+                resources=[config_bucket.bucket_arn],
+            )
+        )
+        config_bucket.add_to_resource_policy(
+            iam.PolicyStatement(
+                actions=["s3:PutObject"],
+                principals=[iam.ServicePrincipal("config.amazonaws.com")],
+                resources=[f"{config_bucket.bucket_arn}/AWSLogs/{cdk.Aws.ACCOUNT_ID}/Config/*"],
+                conditions={"StringEquals": {"s3:x-amz-acl": "bucket-owner-full-control"}},
+            )
+        )
+
+        recorder_role = iam.Role(
+            self,
+            "ConfigRecorderRole",
+            assumed_by=iam.ServicePrincipal("config.amazonaws.com"),
+            managed_policies=[iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWS_ConfigRole")],
+        )
+
+        recorder = config.CfnConfigurationRecorder(
+            self,
+            "ConfigRecorder",
+            role_arn=recorder_role.role_arn,
+            recording_group=config.CfnConfigurationRecorder.RecordingGroupProperty(
+                all_supported=True,
+                include_global_resource_types=True,
+            ),
+        )
+        delivery_channel = config.CfnDeliveryChannel(
+            self,
+            "ConfigDeliveryChannel",
+            name=f"security-toolkit-config-{stage}",
+            s3_bucket_name=config_bucket.bucket_name,
+        )
+        delivery_channel.add_dependency(recorder)
+
+    def _control_enabled(self, controls: dict, control_name: str, *, default: bool = True) -> bool:
+        value = controls.get(control_name, default)
         if isinstance(value, str):
             return value.lower() in ["1", "true", "yes", "on"]
         return bool(value)

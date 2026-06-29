@@ -2,6 +2,7 @@ import json
 import os
 
 import boto3
+import security_hub
 
 
 def get_sns():
@@ -32,6 +33,16 @@ def lambda_handler(event, context):
         Subject=f"AWS CloudTrail change: {event_name}"[:100],
         Message=json.dumps(message, indent=2, default=str),
     )
+    security_hub.import_findings([{
+        "control": "cloudtrail_configuration_change",
+        "severity": "HIGH",
+        "resource": event.get("account", "unknown-account"),
+        "resource_type": "AwsAccount",
+        "title": f"CloudTrail configuration changed: {event_name}",
+        "detail": f"{actor} called {event_name} from {source_ip}.",
+        "remediation": "Review the CloudTrail change, confirm it was authorized, and restore logging if needed.",
+        "guidance_url": "https://docs.aws.amazon.com/awscloudtrail/latest/userguide/best-practices-security.html",
+    }], account_id=event.get("account"), region=event.get("region"))
 
     return {
         "notified": True,
