@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import stale_access_key_quarantine
 
@@ -29,14 +29,14 @@ class FakeIam:
                 "AccessKeyMetadata": [{
                     "AccessKeyId": "AKIA1111111111111111",
                     "Status": "Active",
-                    "CreateDate": datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    "CreateDate": datetime(2024, 1, 1, tzinfo=UTC),
                 }]
             }
         return {
             "AccessKeyMetadata": [{
                 "AccessKeyId": "AKIA2222222222222222",
                 "Status": "Inactive",
-                "CreateDate": datetime(2024, 1, 1, tzinfo=timezone.utc),
+                "CreateDate": datetime(2024, 1, 1, tzinfo=UTC),
             }]
         }
 

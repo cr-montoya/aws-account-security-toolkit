@@ -5,7 +5,6 @@ import aws_cdk as cdk
 
 from stacks.security_toolkit_stack import SecurityToolkitStack
 
-
 app = cdk.App()
 
 config = app.node.try_get_context("security_toolkit") or {}

@@ -25,6 +25,7 @@ class SecurityToolkitStack(cdk.Stack):
         schedule_expression = config.get("schedule_expression", "rate(1 day)")
         allowed_regions = config.get("allowed_regions", ["us-east-1", "us-east-2"])
         organization_target_ids = config.get("organization_target_ids", [])
+        controls = config.get("controls", {})
 
         topic = sns.Topic(
             self,
@@ -41,94 +42,125 @@ class SecurityToolkitStack(cdk.Stack):
             "DRY_RUN": dry_run,
         }
 
-        root_login_function = self._python_function(
-            "RootLoginNotifier",
-            "root_login_notifier.py",
-            environment=common_env,
-        )
-        topic.grant_publish(root_login_function)
-
-        events.Rule(
-            self,
-            "RootConsoleLoginRule",
-            rule_name=f"security-toolkit-root-console-login-{stage}",
-            event_pattern=events.EventPattern(
-                source=["aws.signin"],
-                detail_type=["AWS Console Sign In via CloudTrail"],
-                detail={
-                    "userIdentity": {
-                        "type": ["Root"],
-                    }
-                },
-            ),
-            targets=[targets.LambdaFunction(root_login_function)],
-        )
-
-        stale_key_function = self._python_function(
-            "StaleAccessKeyQuarantine",
-            "stale_access_key_quarantine.py",
-            timeout=Duration.minutes(5),
-            environment={
-                **common_env,
-                "STALE_KEY_DAYS": stale_key_days,
-                "QUARANTINE_POLICY_NAME": "SecurityToolkitDenyAllDueToStaleAccessKey",
-            },
-        )
-        topic.grant_publish(stale_key_function)
-        stale_key_function.add_to_role_policy(
-            iam.PolicyStatement(
-                actions=[
-                    "iam:GetAccessKeyLastUsed",
-                    "iam:ListAccessKeys",
-                    "iam:ListUsers",
-                    "iam:PutUserPolicy",
-                    "iam:TagUser",
-                ],
-                resources=["*"],
+        if self._control_enabled(controls, "root_login_notifier"):
+            root_login_function = self._python_function(
+                "RootLoginNotifier",
+                "root_login_notifier.py",
+                environment=common_env,
             )
-        )
+            topic.grant_publish(root_login_function)
 
-        events.Rule(
-            self,
-            "StaleAccessKeySchedule",
-            rule_name=f"security-toolkit-stale-access-key-scan-{stage}",
-            schedule=events.Schedule.expression(schedule_expression),
-            targets=[targets.LambdaFunction(stale_key_function)],
-        )
-
-        compromised_key_function = self._python_function(
-            "CompromisedKeyResponder",
-            "compromised_key_responder.py",
-            timeout=Duration.minutes(2),
-            environment=common_env,
-        )
-        topic.grant_publish(compromised_key_function)
-        compromised_key_function.add_to_role_policy(
-            iam.PolicyStatement(
-                actions=[
-                    "iam:GetAccessKeyLastUsed",
-                    "iam:ListAccessKeys",
-                    "iam:ListUsers",
-                    "iam:UpdateAccessKey",
-                ],
-                resources=["*"],
+            events.Rule(
+                self,
+                "RootConsoleLoginRule",
+                rule_name=f"security-toolkit-root-console-login-{stage}",
+                event_pattern=events.EventPattern(
+                    source=["aws.signin"],
+                    detail_type=["AWS Console Sign In via CloudTrail"],
+                    detail={
+                        "userIdentity": {
+                            "type": ["Root"],
+                        }
+                    },
+                ),
+                targets=[targets.LambdaFunction(root_login_function)],
             )
-        )
 
-        events.Rule(
-            self,
-            "AwsHealthCompromisedKeyRule",
-            rule_name=f"security-toolkit-compromised-key-health-{stage}",
-            event_pattern=events.EventPattern(
-                source=["aws.health"],
-                detail_type=["AWS Health Event"],
-                detail={
-                    "service": ["IAM"],
-                    "eventTypeCategory": ["issue", "accountNotification"],
+        if self._control_enabled(controls, "cloudtrail_change_notifier"):
+            cloudtrail_change_function = self._python_function(
+                "CloudTrailChangeNotifier",
+                "cloudtrail_change_notifier.py",
+                environment=common_env,
+            )
+            topic.grant_publish(cloudtrail_change_function)
+
+            events.Rule(
+                self,
+                "CloudTrailChangeRule",
+                rule_name=f"security-toolkit-cloudtrail-change-{stage}",
+                event_pattern=events.EventPattern(
+                    source=["aws.cloudtrail"],
+                    detail_type=["AWS API Call via CloudTrail"],
+                    detail={
+                        "eventSource": ["cloudtrail.amazonaws.com"],
+                        "eventName": [
+                            "DeleteTrail",
+                            "PutEventSelectors",
+                            "StopLogging",
+                            "UpdateTrail",
+                        ],
+                    },
+                ),
+                targets=[targets.LambdaFunction(cloudtrail_change_function)],
+            )
+
+        if self._control_enabled(controls, "stale_access_key_quarantine"):
+            stale_key_function = self._python_function(
+                "StaleAccessKeyQuarantine",
+                "stale_access_key_quarantine.py",
+                timeout=Duration.minutes(5),
+                environment={
+                    **common_env,
+                    "STALE_KEY_DAYS": stale_key_days,
+                    "QUARANTINE_POLICY_NAME": "SecurityToolkitDenyAllDueToStaleAccessKey",
                 },
-            ),
-            targets=[targets.LambdaFunction(compromised_key_function)],
-        )
+            )
+            topic.grant_publish(stale_key_function)
+            stale_key_function.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=[
+                        "iam:GetAccessKeyLastUsed",
+                        "iam:ListAccessKeys",
+                        "iam:ListUsers",
+                        "iam:PutUserPolicy",
+                        "iam:TagUser",
+                    ],
+                    resources=["*"],
+                )
+            )
+
+            events.Rule(
+                self,
+                "StaleAccessKeySchedule",
+                rule_name=f"security-toolkit-stale-access-key-scan-{stage}",
+                schedule=events.Schedule.expression(schedule_expression),
+                targets=[targets.LambdaFunction(stale_key_function)],
+            )
+
+        if self._control_enabled(controls, "compromised_key_responder"):
+            compromised_key_function = self._python_function(
+                "CompromisedKeyResponder",
+                "compromised_key_responder.py",
+                timeout=Duration.minutes(2),
+                environment=common_env,
+            )
+            topic.grant_publish(compromised_key_function)
+            compromised_key_function.add_to_role_policy(
+                iam.PolicyStatement(
+                    actions=[
+                        "iam:GetAccessKeyLastUsed",
+                        "iam:ListAccessKeys",
+                        "iam:ListUsers",
+                        "iam:UpdateAccessKey",
+                    ],
+                    resources=["*"],
+                )
+            )
+
+            events.Rule(
+                self,
+                "AwsHealthCompromisedKeyRule",
+                rule_name=f"security-toolkit-compromised-key-health-{stage}",
+                event_pattern=events.EventPattern(
+                    source=["aws.health"],
+                    detail_type=["AWS Health Event"],
+                    detail={
+                        "service": ["IAM"],
+                        "eventTypeCategory": ["issue", "accountNotification"],
+                    },
+                ),
+                targets=[targets.LambdaFunction(compromised_key_function)],
+            )
 
         if organization_target_ids:
             policy_content = self._region_deny_scp(allowed_regions)
@@ -150,8 +182,9 @@ class SecurityToolkitStack(cdk.Stack):
         handler_file: str,
         *,
         environment: dict,
-        timeout: Duration = Duration.seconds(60),
+        timeout: Duration | None = None,
     ) -> lambda_.Function:
+        timeout = timeout or Duration.seconds(60)
         log_group = logs.LogGroup(
             self,
             f"{construct_id}LogGroup",
@@ -172,6 +205,12 @@ class SecurityToolkitStack(cdk.Stack):
             log_group=log_group,
             tracing=lambda_.Tracing.ACTIVE,
         )
+
+    def _control_enabled(self, controls: dict, control_name: str) -> bool:
+        value = controls.get(control_name, True)
+        if isinstance(value, str):
+            return value.lower() in ["1", "true", "yes", "on"]
+        return bool(value)
 
     def _region_deny_scp(self, allowed_regions: list[str]) -> dict:
         policy_path = Path(__file__).resolve().parents[1] / "policies" / "deny-unapproved-regions-scp.json"

@@ -7,6 +7,7 @@ Security automation toolkit for AWS accounts. This project is designed as a coll
 The toolkit starts intentionally small and practical:
 
 - Notify root user console sign-in attempts and successes.
+- Notify when CloudTrail trails are stopped, deleted, or modified.
 - Detect IAM access keys that have not been used in 90 days and attach a deny-all quarantine policy to the IAM user.
 - Disable access keys reported by AWS Health as exposed or compromised.
 - Provide an Organizations SCP pattern to deny usage outside approved AWS Regions.
@@ -20,6 +21,9 @@ AWS account events
   |
   +--> EventBridge: AWS Console Sign In via CloudTrail
   |       `--> RootLoginNotifier Lambda --> SNS topic
+  |
+  +--> EventBridge: AWS API Call via CloudTrail
+  |       `--> CloudTrailChangeNotifier Lambda --> SNS topic
   |
   +--> EventBridge: AWS Health event
   |       `--> CompromisedKeyResponder Lambda --> IAM UpdateAccessKey Inactive
@@ -36,6 +40,7 @@ AWS Organizations
 | Control | Mode | Default |
 |---|---|---|
 | Root sign-in notification | EventBridge + Lambda + SNS | Active |
+| CloudTrail change notification | EventBridge + Lambda + SNS | Active |
 | 90-day unused access key quarantine | Scheduled Lambda | Dry run |
 | AWS Health compromised key disablement | EventBridge + Lambda | Dry run |
 | Approved Regions only | SCP artifact / optional CDK Organizations policy | Disabled unless target IDs are provided |
@@ -46,17 +51,19 @@ AWS Organizations
 SecurityToolkit/
 |-- app.py
 |-- cdk.json
-|-- requirements.txt
-|-- requirements-dev.txt
+|-- pyproject.toml
+|-- uv.lock
 |-- README.md
 |-- stacks/
 |   `-- security_toolkit_stack.py
 |-- lambdas/
 |   |-- root_login_notifier.py
+|   |-- cloudtrail_change_notifier.py
 |   |-- stale_access_key_quarantine.py
 |   `-- compromised_key_responder.py
 |-- tests/
 |   |-- test_root_login_notifier.py
+|   |-- test_cloudtrail_change_notifier.py
 |   |-- test_stale_access_key_quarantine.py
 |   |-- test_compromised_key_responder.py
 |   `-- test_stack.py
@@ -75,19 +82,29 @@ Configuration is read from CDK context in `cdk.json`.
 | `security_toolkit.dry_run` | Keeps remediation actions from changing IAM state |
 | `security_toolkit.stale_key_days` | Age threshold for access key quarantine |
 | `security_toolkit.schedule_expression` | EventBridge schedule for stale-key checks |
+| `security_toolkit.controls` | Per-control enable/disable flags |
 | `security_toolkit.allowed_regions` | Regions allowed by the SCP |
 | `security_toolkit.organization_target_ids` | Optional OU/account/root IDs to attach the SCP |
+
+Control flags default to enabled when omitted:
+
+```json
+"controls": {
+  "root_login_notifier": true,
+  "cloudtrail_change_notifier": true,
+  "stale_access_key_quarantine": true,
+  "compromised_key_responder": true
+}
+```
 
 ## Deploy
 
 ```bash
 cd SecurityToolkit
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv sync --all-groups
 
-cdk synth
-cdk deploy
+npx -y aws-cdk@latest synth
+npx -y aws-cdk@latest deploy
 ```
 
 If `notification_email` is set, confirm the SNS subscription email after deployment.
@@ -107,15 +124,34 @@ Then redeploy.
 ## Testing
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements-dev.txt
-
-python -m pytest tests -q
-cdk synth
+uv sync --all-groups
+uv run pytest
+npx -y aws-cdk@latest synth
 ```
 
 The unit tests validate Lambda responder behavior with fake AWS clients and verify that the CDK stack creates the expected core resources.
+
+## Development
+
+This project uses `uv` for Python dependency management. Common commands:
+
+```bash
+make sync
+make lint
+make test
+make synth
+make validate
+```
+
+`uv` manages Python dependencies and runs the CDK app through `cdk.json`. The CDK CLI is invoked with `npx -y aws-cdk@latest` so local and CI runs do not depend on a stale globally installed `cdk` binary.
+
+To install local git hooks:
+
+```bash
+uv run pre-commit install
+```
+
+`pyproject.toml` and `uv.lock` are the source of truth for local development and CI dependencies.
 
 ## Approved Regions SCP
 
@@ -129,7 +165,6 @@ Review [policies/deny-unapproved-regions-scp.json](policies/deny-unapproved-regi
 
 High-impact next controls:
 
-- Alert when CloudTrail is stopped, deleted, or modified.
 - Auto-enable GuardDuty across regions.
 - Auto-enable Security Hub standards.
 - Detect and quarantine public S3 buckets.

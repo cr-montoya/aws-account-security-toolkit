@@ -13,25 +13,27 @@ This is a study and portfolio repository, so contributions should keep the proje
 
 ## Validation
 
-For SAM changes:
+Use `uv` for local validation:
 
 ```bash
-cd SAM
-python -m pytest tests/unit -q
-sam validate --lint
-sam build
+uv sync --all-groups
+uv run ruff check .
+uv run pytest
+npx -y aws-cdk@latest synth
 ```
 
-For CDK changes:
+Or run the combined target:
 
 ```bash
-cd CDK
-.venv/bin/python -m pytest tests/unit/ -v --tb=short -p no:cacheprovider
-cdk synth
+make validate
+```
+
+Before opening a pull request, run the same checks through pre-commit if hooks are installed:
+
+```bash
+uv run pre-commit run --all-files
 ```
 
 ## Documentation
 
-Use the root README for shared repository context: exam coverage, shared prerequisites, cost notes, safety notes, and how the projects compare.
-
-Use project READMEs for app-specific details: architecture, commands, pipeline behavior, validation, and cleanup.
+Update `README.md` when commands, architecture, configuration, validation, or cleanup behavior changes.

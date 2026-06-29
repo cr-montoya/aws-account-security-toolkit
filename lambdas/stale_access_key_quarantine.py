@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import boto3
 
@@ -29,7 +29,7 @@ def lambda_handler(event, context):
     dry_run = os.environ.get("DRY_RUN", "true").lower() == "true"
     stale_key_days = int(os.environ.get("STALE_KEY_DAYS", "90"))
     policy_name = os.environ.get("QUARANTINE_POLICY_NAME", "SecurityToolkitDenyAllDueToStaleAccessKey")
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     quarantined = []
     iam = get_iam()
 
