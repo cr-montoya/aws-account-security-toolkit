@@ -1,0 +1,17 @@
+{
+  "app": "python3 app.py",
+  "context": {
+    "security_toolkit": {
+      "stage": "dev",
+      "notification_email": "",
+      "dry_run": true,
+      "stale_key_days": 90,
+      "schedule_expression": "rate(1 day)",
+      "allowed_regions": [
+        "us-east-1",
+        "us-east-2"
+      ],
+      "organization_target_ids": []
+    }
+  }
+}
